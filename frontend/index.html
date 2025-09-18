@@ -1,65 +1,116 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Local Cursor — Offline</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Local Cursor</title>
   <link rel="icon" href="/assets/logo.svg">
   <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
-  <div id="app" class="app">
+  <div class="app">
     <header class="topbar">
-      <div class="left">
-        <img src="/assets/logo.svg" class="logo" alt="logo">
+      <div class="topbar-left">
+        <img src="/assets/logo.svg" class="logo" alt="Logo">
         <span class="brand">Local Cursor</span>
-        <button id="btnNewFile" title="New File (N)">＋</button>
-        <button id="btnNewFolder" title="New Folder">📁＋</button>
-        <button id="btnDelete" title="Delete">🗑️</button>
+        <button id="btnNewFile" title="New file (Ctrl+N)">＋ File</button>
+        <button id="btnNewFolder" title="New folder">＋ Folder</button>
+        <button id="btnDelete" title="Delete selected">🗑 Delete</button>
         <div class="divider"></div>
-        <input id="searchBox" placeholder="Search files or contents… (Enter)"/>
+        <input id="searchBox" placeholder="Search (Enter)" autocomplete="off">
       </div>
-      <div class="right">
-        <select id="backendSelect">
-          <option value="ollama">Ollama</option>
-          <option value="lmstudio">LM Studio</option>
-        </select>
-        <select id="modelSelect"></select>
-        <input id="temp" type="number" step="0.1" min="0" max="2" title="Temperature">
-        <input id="topP" type="number" step="0.05" min="0" max="1" title="Top P">
-        <input id="maxToks" type="number" step="1" min="128" max="8192" title="Max Tokens">
-        <button id="btnSettings" title="Save Settings">⚙️</button>
-        <button id="btnTheme" title="Toggle Theme">🌓</button>
+      <div class="topbar-right">
+        <button id="btnClearChat" title="Clear chat">🧹</button>
+        <button id="btnTheme" title="Toggle theme">🌓</button>
+        <button id="btnSettings" class="primary" title="Settings">⚙ Settings</button>
       </div>
     </header>
 
     <main class="main">
       <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+          <span>workspace/</span>
+        </div>
         <div class="tree" id="fileTree"></div>
       </aside>
+
       <section class="editorPane">
         <div class="editorBar">
-          <span id="currentPath">untitled.txt</span>
+          <span id="currentPath">No file selected</span>
           <div class="editorActions">
-            <button id="btnSave" title="Ctrl/Cmd+S">💾 Save</button>
-            <button id="btnRename">✎ Rename</button>
+            <button id="btnSave" title="Save (Ctrl/Cmd+S)">💾 Save</button>
+            <button id="btnRename" title="Rename">✏ Rename</button>
           </div>
+        </div>
+        <div class="findReplace">
+          <input id="findInput" placeholder="Find" autocomplete="off">
+          <input id="replaceInput" placeholder="Replace" autocomplete="off">
+          <button id="btnFindNext">Find next</button>
+          <button id="btnReplace">Replace</button>
+          <button id="btnReplaceAll">Replace all</button>
         </div>
         <textarea id="editor" spellcheck="false"></textarea>
       </section>
+
       <section class="chatPane">
+        <div class="chatHeader">
+          <span>Chat</span>
+          <button id="btnStop" title="Stop streaming">⏹ Stop</button>
+        </div>
         <div class="chatLog" id="chatLog"></div>
         <div class="chatInput">
           <textarea id="chatBox" rows="3" placeholder="Ask the local model…"></textarea>
           <div class="chatActions">
+            <label><input type="checkbox" id="cbInsert"> Insert response into editor</label>
             <button id="btnAsk">Ask ▶</button>
-            <label class="small"><input type="checkbox" id="cbInsert"/> Insert into editor</label>
           </div>
         </div>
       </section>
     </main>
   </div>
 
-  <script src="/assets/app.js"></script>
+  <div id="settingsPanel" class="settingsPanel hidden" aria-hidden="true">
+    <div class="settingsDialog" role="dialog" aria-modal="true">
+      <header>
+        <h2>Settings</h2>
+        <button id="btnCloseSettings" aria-label="Close">✕</button>
+      </header>
+      <div class="settingsBody">
+        <label>Backend
+          <select id="backendSelect">
+            <option value="ollama">Ollama</option>
+            <option value="lmstudio">LM Studio</option>
+          </select>
+        </label>
+        <label>Ollama base URL
+          <input id="ollamaUrl" type="text" placeholder="http://127.0.0.1:11434">
+        </label>
+        <label>LM Studio base URL
+          <input id="lmstudioUrl" type="text" placeholder="http://127.0.0.1:1234">
+        </label>
+        <label>Model
+          <select id="modelSelect"></select>
+        </label>
+        <label>Temperature
+          <input id="temp" type="number" step="0.1" min="0" max="2">
+        </label>
+        <label>Top P
+          <input id="topP" type="number" step="0.05" min="0" max="1">
+        </label>
+        <label>Max tokens
+          <input id="maxToks" type="number" step="1" min="64" max="8192">
+        </label>
+      </div>
+      <footer>
+        <span id="settingsStatus" role="status"></span>
+        <div class="settingsActions">
+          <button id="btnRefreshModels">Refresh models</button>
+          <button id="btnSaveSettings" class="primary">Save</button>
+        </div>
+      </footer>
+    </div>
+  </div>
+
+  <script src="/assets/app.js" type="module"></script>
 </body>
 </html>
