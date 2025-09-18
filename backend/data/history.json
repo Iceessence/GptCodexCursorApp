@@ -1,0 +1,64 @@
+{
+  "sessions": [
+    {
+      "ts": "2025-09-18T20:55:41.661814Z",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are a helpful coding assistant."
+        },
+        {
+          "role": "user",
+          "content": "Hello"
+        }
+      ],
+      "model": "qwen3:14b",
+      "backend": "ollama"
+    },
+    {
+      "ts": "2025-09-18T20:55:59.199340Z",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are a helpful coding assistant."
+        },
+        {
+          "role": "user",
+          "content": "Hello"
+        }
+      ],
+      "model": "qwen3:4b",
+      "backend": "ollama"
+    },
+    {
+      "ts": "2025-09-18T20:56:28.462272Z",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are a helpful coding assistant."
+        },
+        {
+          "role": "user",
+          "content": "Edit this text file"
+        }
+      ],
+      "model": "qwen3:4b",
+      "backend": "ollama"
+    },
+    {
+      "ts": "2025-09-18T21:00:31.160383Z",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are a helpful coding assistant."
+        },
+        {
+          "role": "user",
+          "content": "Hello"
+        }
+      ],
+      "model": "phi4-mini-reasoning:3.8b",
+      "backend": "ollama"
+    }
+  ]
+}

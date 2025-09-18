@@ -1,0 +1,9 @@
+# Welcome!
+
+This is **Local Cursor**.
+- Choose backend (Ollama or LM Studio)
+- Pick a model
+- Type on the right to chat
+- Save files in the center editor
+
+Happy hacking!

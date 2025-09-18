@@ -1,0 +1,65 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Local Cursor — Offline</title>
+  <link rel="icon" href="/assets/logo.svg">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div id="app" class="app">
+    <header class="topbar">
+      <div class="left">
+        <img src="/assets/logo.svg" class="logo" alt="logo">
+        <span class="brand">Local Cursor</span>
+        <button id="btnNewFile" title="New File (N)">＋</button>
+        <button id="btnNewFolder" title="New Folder">📁＋</button>
+        <button id="btnDelete" title="Delete">🗑️</button>
+        <div class="divider"></div>
+        <input id="searchBox" placeholder="Search files or contents… (Enter)"/>
+      </div>
+      <div class="right">
+        <select id="backendSelect">
+          <option value="ollama">Ollama</option>
+          <option value="lmstudio">LM Studio</option>
+        </select>
+        <select id="modelSelect"></select>
+        <input id="temp" type="number" step="0.1" min="0" max="2" title="Temperature">
+        <input id="topP" type="number" step="0.05" min="0" max="1" title="Top P">
+        <input id="maxToks" type="number" step="1" min="128" max="8192" title="Max Tokens">
+        <button id="btnSettings" title="Save Settings">⚙️</button>
+        <button id="btnTheme" title="Toggle Theme">🌓</button>
+      </div>
+    </header>
+
+    <main class="main">
+      <aside class="sidebar" id="sidebar">
+        <div class="tree" id="fileTree"></div>
+      </aside>
+      <section class="editorPane">
+        <div class="editorBar">
+          <span id="currentPath">untitled.txt</span>
+          <div class="editorActions">
+            <button id="btnSave" title="Ctrl/Cmd+S">💾 Save</button>
+            <button id="btnRename">✎ Rename</button>
+          </div>
+        </div>
+        <textarea id="editor" spellcheck="false"></textarea>
+      </section>
+      <section class="chatPane">
+        <div class="chatLog" id="chatLog"></div>
+        <div class="chatInput">
+          <textarea id="chatBox" rows="3" placeholder="Ask the local model…"></textarea>
+          <div class="chatActions">
+            <button id="btnAsk">Ask ▶</button>
+            <label class="small"><input type="checkbox" id="cbInsert"/> Insert into editor</label>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/assets/app.js"></script>
+</body>
+</html>
