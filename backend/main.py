@@ -1,7 +1,10 @@
 import asyncio
 import json
 import os
+import shutil
+import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import httpx
@@ -11,13 +14,16 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
-APP_ROOT = os.path.dirname(os.path.abspath(os.path.join(__file__, os.pardir)))
-BACKEND_ROOT = os.path.dirname(os.path.abspath(__file__))
-FRONTEND_ROOT = os.path.join(APP_ROOT, "frontend")
-WORKSPACE_ROOT = os.path.join(APP_ROOT, "workspace")
-SETTINGS_PATH = os.path.join(BACKEND_ROOT, "settings.json")
-HISTORY_DIR = os.path.join(BACKEND_ROOT, "data")
-HISTORY_PATH = os.path.join(HISTORY_DIR, "history.json")
+BACKEND_ROOT = Path(__file__).resolve().parent
+APP_ROOT = BACKEND_ROOT.parent
+IS_FROZEN = getattr(sys, "frozen", False)
+EXEC_ROOT = Path(sys.executable).resolve().parent if IS_FROZEN else APP_ROOT
+RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", EXEC_ROOT if IS_FROZEN else APP_ROOT))
+FRONTEND_ROOT = RESOURCE_ROOT / "frontend"
+WORKSPACE_ROOT = EXEC_ROOT / "workspace"
+SETTINGS_PATH = (EXEC_ROOT / "settings.json") if IS_FROZEN else BACKEND_ROOT / "settings.json"
+HISTORY_DIR = (EXEC_ROOT / "data") if IS_FROZEN else BACKEND_ROOT / "data"
+HISTORY_PATH = HISTORY_DIR / "history.json"
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "backend": "ollama",
@@ -29,16 +35,18 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "max_tokens": 2048,
 }
 
-os.makedirs(WORKSPACE_ROOT, exist_ok=True)
-os.makedirs(HISTORY_DIR, exist_ok=True)
+WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
+HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _ensure_settings() -> None:
-    if not os.path.exists(SETTINGS_PATH):
+    if not SETTINGS_PATH.exists():
+        SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(SETTINGS_PATH, "w", encoding="utf-8") as fh:
             json.dump(DEFAULT_SETTINGS, fh, indent=2)
 
-    if not os.path.exists(HISTORY_PATH):
+    if not HISTORY_PATH.exists():
+        HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(HISTORY_PATH, "w", encoding="utf-8") as fh:
             json.dump({"sessions": []}, fh, indent=2)
 
@@ -82,12 +90,12 @@ app.add_middleware(
     allow_credentials=True,
 )
 
-app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_ROOT, "assets")), name="assets")
+app.mount("/assets", StaticFiles(directory=str(FRONTEND_ROOT / "assets")), name="assets")
 
 
 @app.get("/")
 async def index() -> FileResponse:
-    return FileResponse(os.path.join(FRONTEND_ROOT, "index.html"))
+    return FileResponse(str(FRONTEND_ROOT / "index.html"))
 
 
 @app.get("/health")
@@ -159,8 +167,11 @@ async def _stream_ollama(
     payload: Dict[str, Any],
     request: Request,
 ) -> AsyncGenerator[Dict[str, str], None]:
+    yield {"event": "status", "data": json.dumps({"stage": "connecting"})}
     async with client.stream("POST", f"{url.rstrip('/')}/api/generate", json=payload) as response:
         response.raise_for_status()
+        yield {"event": "status", "data": json.dumps({"stage": "connected"})}
+        first_token = True
         async for line in response.aiter_lines():
             if await request.is_disconnected():
                 break
@@ -172,9 +183,13 @@ async def _stream_ollama(
                 continue
             token = data.get("response")
             if token:
+                if first_token:
+                    first_token = False
+                    yield {"event": "status", "data": json.dumps({"stage": "streaming"})}
                 yield {"event": "delta", "data": token}
             if data.get("done"):
                 break
+    yield {"event": "status", "data": json.dumps({"stage": "completed"})}
 
 
 async def _stream_lmstudio(
@@ -183,8 +198,11 @@ async def _stream_lmstudio(
     payload: Dict[str, Any],
     request: Request,
 ) -> AsyncGenerator[Dict[str, str], None]:
+    yield {"event": "status", "data": json.dumps({"stage": "connecting"})}
     async with client.stream("POST", f"{url.rstrip('/')}/v1/chat/completions", json=payload) as response:
         response.raise_for_status()
+        yield {"event": "status", "data": json.dumps({"stage": "connected"})}
+        first_token = True
         async for raw_line in response.aiter_lines():
             if await request.is_disconnected():
                 break
@@ -201,7 +219,11 @@ async def _stream_lmstudio(
                 continue
             delta = data.get("choices", [{}])[0].get("delta", {}).get("content")
             if delta:
+                if first_token:
+                    first_token = False
+                    yield {"event": "status", "data": json.dumps({"stage": "streaming"})}
                 yield {"event": "delta", "data": delta}
+    yield {"event": "status", "data": json.dumps({"stage": "completed"})}
 
 
 @app.post("/chat_stream")
@@ -237,6 +259,7 @@ async def chat_stream(request: Request) -> EventSourceResponse:
                     async for event in _stream_ollama(client, base_url, req, request):
                         yield event
                 except Exception as exc:
+                    yield {"event": "status", "data": json.dumps({"stage": "error", "message": str(exc)})}
                     yield {"event": "error", "data": str(exc)}
             else:
                 base_url = payload.get("lmstudio_base_url") or settings["lmstudio_base_url"]
@@ -252,6 +275,7 @@ async def chat_stream(request: Request) -> EventSourceResponse:
                     async for event in _stream_lmstudio(client, base_url, req, request):
                         yield event
                 except Exception as exc:
+                    yield {"event": "status", "data": json.dumps({"stage": "error", "message": str(exc)})}
                     yield {"event": "error", "data": str(exc)}
         yield {"event": "end", "data": ""}
 
@@ -333,28 +357,29 @@ async def chat_once(payload: Dict[str, Any]) -> Dict[str, Any]:
 # Workspace file endpoints
 # -----------------------
 
-def _safe_join(base: str, path: str) -> str:
-    target = os.path.abspath(os.path.join(base, path))
-    base_abs = os.path.abspath(base)
-    if not target.startswith(base_abs):
-        raise HTTPException(status_code=400, detail="Invalid path")
+def _safe_join(base: Path, path: str) -> Path:
+    target = (base / (path or "")).resolve()
+    try:
+        target.relative_to(base.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid path") from exc
     return target
 
 
 @app.get("/fs/list")
 async def fs_list(path: str = "") -> Dict[str, Any]:
     target = _safe_join(WORKSPACE_ROOT, path)
-    if not os.path.exists(target):
+    if not target.exists():
         return {"path": path, "items": []}
     items: List[Dict[str, Any]] = []
-    for name in sorted(os.listdir(target)):
-        full_path = os.path.join(target, name)
+    for name in sorted(p.name for p in target.iterdir()):
+        full_path = target / name
         items.append(
             {
                 "name": name,
-                "path": os.path.relpath(full_path, WORKSPACE_ROOT).replace("\\", "/"),
-                "is_dir": os.path.isdir(full_path),
-                "size": os.path.getsize(full_path) if os.path.isfile(full_path) else 0,
+                "path": full_path.relative_to(WORKSPACE_ROOT).as_posix(),
+                "is_dir": full_path.is_dir(),
+                "size": full_path.stat().st_size if full_path.is_file() else 0,
             }
         )
     return {"path": path, "items": items}
@@ -365,9 +390,9 @@ async def fs_read(path: str) -> Dict[str, Any]:
     if not path:
         raise HTTPException(400, "Path is required")
     target = _safe_join(WORKSPACE_ROOT, path)
-    if not os.path.exists(target) or not os.path.isfile(target):
+    if not target.exists() or not target.is_file():
         raise HTTPException(404, "File not found")
-    with open(target, "r", encoding="utf-8", errors="ignore") as fh:
+    with target.open("r", encoding="utf-8", errors="ignore") as fh:
         content = fh.read()
     return {"path": path, "content": content}
 
@@ -379,8 +404,8 @@ async def fs_write(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not path:
         raise HTTPException(400, "Path is required")
     target = _safe_join(WORKSPACE_ROOT, path)
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    with open(target, "w", encoding="utf-8") as fh:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("w", encoding="utf-8") as fh:
         fh.write(content)
     return {"ok": True}
 
@@ -393,10 +418,10 @@ async def fs_new(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(400, "Path is required")
     target = _safe_join(WORKSPACE_ROOT, path)
     if is_dir:
-        os.makedirs(target, exist_ok=True)
+        target.mkdir(parents=True, exist_ok=True)
     else:
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        with open(target, "w", encoding="utf-8") as fh:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("w", encoding="utf-8") as fh:
             fh.write("")
     return {"ok": True}
 
@@ -409,8 +434,8 @@ async def fs_rename(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(400, "src and dst are required")
     source = _safe_join(WORKSPACE_ROOT, src)
     dest = _safe_join(WORKSPACE_ROOT, dst)
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    os.replace(source, dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    source.replace(dest)
     return {"ok": True}
 
 
@@ -420,15 +445,10 @@ async def fs_delete(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not path:
         raise HTTPException(400, "Path is required")
     target = _safe_join(WORKSPACE_ROOT, path)
-    if os.path.isdir(target):
-        for root, dirs, files in os.walk(target, topdown=False):
-            for filename in files:
-                os.remove(os.path.join(root, filename))
-            for dirname in dirs:
-                os.rmdir(os.path.join(root, dirname))
-        os.rmdir(target)
-    elif os.path.exists(target):
-        os.remove(target)
+    if target.is_dir():
+        shutil.rmtree(target)
+    elif target.exists():
+        target.unlink()
     return {"ok": True}
 
 
@@ -440,18 +460,18 @@ async def fs_search(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"matches": []}
 
     base_dir = _safe_join(WORKSPACE_ROOT, scope)
-    if not os.path.exists(base_dir):
+    if not base_dir.exists():
         return {"matches": []}
 
     matches: List[Dict[str, Any]] = []
     for root_dir, _, files in os.walk(base_dir):
         for filename in files:
-            file_path = os.path.join(root_dir, filename)
-            relative = os.path.relpath(file_path, WORKSPACE_ROOT).replace("\\", "/")
+            file_path = Path(root_dir) / filename
+            relative = file_path.relative_to(WORKSPACE_ROOT).as_posix()
             if query in filename.lower():
                 matches.append({"path": relative, "line": 0, "context": filename})
             try:
-                with open(file_path, "r", encoding="utf-8", errors="ignore") as fh:
+                with file_path.open("r", encoding="utf-8", errors="ignore") as fh:
                     for line_number, line in enumerate(fh, start=1):
                         if query in line.lower():
                             matches.append(

@@ -5,13 +5,13 @@ Works with **Ollama** or **LM Studio** on your machine. No cloud, no paid APIs.
 
 ## Features
 - Local-only: Uses your **Ollama** (`http://localhost:11434`) or **LM Studio** (`http://localhost:1234`) server
-- Chat + streaming responses
+- Chat with streaming responses, live status indicators, and cancel support
 - File explorer, open/save, create/rename/delete
 - Editor with line numbers, soft-wrap, and basic shortcuts (Ctrl/Cmd+S to save)
 - Search & replace across files or in an open file
 - History log stored locally (`backend/data/history.json`)
 - Model parameters: temperature, top_p, max_tokens
-- Model switcher & backend switcher (Ollama or LM Studio)
+- Quick backend/model switcher in the top bar + searchable model palette
 - Dark/Light theme toggle
 - Cross-platform: Windows, macOS, Linux
 
@@ -37,7 +37,21 @@ Then open http://127.0.0.1:8000
 
 ## Settings
 Click the ⚙️ icon in the top bar to switch between Ollama and LM Studio, choose a model, and adjust parameters.
-Settings are persisted in `backend/settings.json`.
+You can also switch backends or models instantly from the top bar quick selector.
+Settings are persisted in `backend/settings.json` (or alongside the packaged executable).
+
+## Build a Windows executable
+
+Prefer a single-file launcher? Use the included PyInstaller helper:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r backend\requirements.txt -r backend\requirements-build.txt
+python backend\build_exe.py --onefile
+```
+
+The executable is created in `backend/dist/LocalCursor.exe`. Run it to start the bundled server; it opens `http://127.0.0.1:8000` in your default browser. Use `python backend\build_exe.py --check` to verify PyInstaller is available or pass `--print-only` to inspect the build command.
 
 ## Notes
 - For **Ollama** models list, we query `/api/tags` locally.
@@ -45,5 +59,6 @@ Settings are persisted in `backend/settings.json`.
 - Streaming:
   - Ollama: `/api/generate` with `"stream": true`
   - LM Studio: `/v1/chat/completions` with `stream: true` (SSE-like chunks)
+- The packaged executable stores settings and chat history next to the `.exe`, while the dev server keeps them under `backend/`.
 
 Enjoy!

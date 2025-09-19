@@ -20,6 +20,18 @@
         <input id="searchBox" placeholder="Search (Enter)" autocomplete="off">
       </div>
       <div class="topbar-right">
+        <div class="quickSwitch" role="group" aria-label="Quick backend and model switcher">
+          <select id="quickBackendSelect" title="Active backend">
+            <option value="ollama">Ollama</option>
+            <option value="lmstudio">LM Studio</option>
+          </select>
+          <input id="quickModelInput" type="search" list="modelOptions" placeholder="Model…" autocomplete="off" title="Active model">
+          <button id="btnQuickRefresh" title="Refresh available models">⟳</button>
+        </div>
+        <div class="statusPill" id="statusPill" role="status" aria-live="polite" data-tone="pending">
+          <span class="statusDot"></span>
+          <span id="statusText">Loading…</span>
+        </div>
         <button id="btnClearChat" title="Clear chat">🧹</button>
         <button id="btnTheme" title="Toggle theme">🌓</button>
         <button id="btnSettings" class="primary" title="Settings">⚙ Settings</button>
@@ -54,10 +66,25 @@
 
       <section class="chatPane">
         <div class="chatHeader">
-          <span>Chat</span>
-          <button id="btnStop" title="Stop streaming">⏹ Stop</button>
+          <div class="chatHeaderInfo">
+            <div class="chatTitleRow">
+              <span class="chatTitle">Chat</span>
+              <span id="chatStatus" class="chatStatus" data-tone="idle">Idle</span>
+            </div>
+            <div class="chatMeta">
+              <span id="chatModelLabel" class="chatMetaItem">No model selected</span>
+              <span class="chatMetaDivider isHidden" aria-hidden="true">•</span>
+              <span id="chatTimerLabel" class="chatMetaItem"></span>
+            </div>
+          </div>
+          <div class="chatHeaderActions">
+            <button id="btnStop" title="Stop streaming">⏹ Stop</button>
+          </div>
         </div>
-        <div class="chatLog" id="chatLog"></div>
+        <div class="chatLogWrapper">
+          <div class="chatLog" id="chatLog"></div>
+          <button id="btnScrollToBottom" class="scrollToBottom isHidden" type="button">Scroll to latest ↓</button>
+        </div>
         <div class="chatInput">
           <textarea id="chatBox" rows="3" placeholder="Ask the local model…"></textarea>
           <div class="chatActions">
@@ -89,7 +116,7 @@
           <input id="lmstudioUrl" type="text" placeholder="http://127.0.0.1:1234">
         </label>
         <label>Model
-          <select id="modelSelect"></select>
+          <input id="modelInput" type="search" list="modelOptions" placeholder="e.g. llama3" autocomplete="off">
         </label>
         <label>Temperature
           <input id="temp" type="number" step="0.1" min="0" max="2">
@@ -110,6 +137,8 @@
       </footer>
     </div>
   </div>
+
+  <datalist id="modelOptions"></datalist>
 
   <script src="/assets/app.js" type="module"></script>
 </body>
