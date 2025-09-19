@@ -34,6 +34,7 @@
         </div>
         <button id="btnClearChat" title="Clear chat">🧹</button>
         <button id="btnTheme" title="Toggle theme">🌓</button>
+        <button id="btnHelp" title="How everything works">❔ Help</button>
         <button id="btnSettings" class="primary" title="Settings">⚙ Settings</button>
       </div>
     </header>
@@ -80,6 +81,14 @@
           <div class="chatHeaderActions">
             <button id="btnStop" title="Stop streaming">⏹ Stop</button>
           </div>
+        </div>
+        <div class="chatAssist" id="chatAssist" role="region" aria-live="polite">
+          <div class="chatAssistHeader">
+            <span class="chatAssistTitle">Need ideas?</span>
+            <button id="btnDismissTips" type="button" aria-label="Hide suggestions">✕</button>
+          </div>
+          <p class="chatAssistIntro">Pick a shortcut prompt to get going faster:</p>
+          <div class="chatAssistButtons" id="chatAssistButtons"></div>
         </div>
         <div class="chatLogWrapper">
           <div class="chatLog" id="chatLog"></div>
@@ -131,9 +140,33 @@
       <footer>
         <span id="settingsStatus" role="status"></span>
         <div class="settingsActions">
+          <button id="btnTestConnection" type="button">Test connection</button>
           <button id="btnRefreshModels">Refresh models</button>
           <button id="btnSaveSettings" class="primary">Save</button>
         </div>
+      </footer>
+    </div>
+  </div>
+
+  <div id="helpPanel" class="helpPanel hidden" aria-hidden="true">
+    <div class="helpDialog" role="dialog" aria-modal="true">
+      <header>
+        <h2>Quick help</h2>
+        <button id="btnCloseHelp" aria-label="Close help">✕</button>
+      </header>
+      <div class="helpBody">
+        <ol class="helpSteps">
+          <li><strong>Pick your backend.</strong> Use ⚙ Settings to choose Ollama or LM Studio and pick a model.</li>
+          <li><strong>Open or create a file.</strong> Use the workspace panel on the left to open files or add new ones.</li>
+          <li><strong>Ask the assistant.</strong> Type a question in the chat box or click one of the quick prompts.</li>
+          <li><strong>Insert answers.</strong> Tick “Insert response into editor” to drop code into the file you’re editing.</li>
+          <li><strong>Need an offline build?</strong> Run the build command shown in the README to create a Windows executable.</li>
+        </ol>
+        <p class="helpNote">Tip: use Ctrl/Cmd + Enter in chat to send faster, and Ctrl/Cmd + S to save the editor.</p>
+      </div>
+      <footer>
+        <button id="btnRestoreTips" type="button">Show tips again</button>
+        <button id="btnHelpCloseFooter" class="primary" type="button">Got it</button>
       </footer>
     </div>
   </div>
