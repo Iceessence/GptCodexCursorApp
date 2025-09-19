@@ -10,6 +10,29 @@ const state = {
   chatStartTime: null,
   chatTimerId: null,
   modelCache: {},
+  tipsDismissed: false,
+  quickPrompts: [
+    {
+      label: "Explain this file",
+      template: "Explain what {file} is responsible for and outline the main functions in plain language.",
+    },
+    {
+      label: "Look for bugs",
+      template: "Review {file} and point out any bugs, risky code paths, or missing edge cases.",
+    },
+    {
+      label: "Write tests",
+      template: "Draft unit tests for the logic in {file}. Show the code and describe how to run it.",
+    },
+    {
+      label: "Next steps",
+      template: "Suggest the next three improvements for this project based on the currently open files.",
+    },
+    {
+      label: "How do I run this?",
+      template: "Explain how to install prerequisites and run this project locally using simple language.",
+    },
+  ],
 };
 
 const numbers = {
@@ -99,6 +122,62 @@ function updateChatMetaDivider() {
   divider.classList.toggle('isHidden', !shouldShow);
 }
 
+function renderQuickPrompts() {
+  const container = $('#chatAssistButtons');
+  if (!container) return;
+  container.innerHTML = '';
+  state.quickPrompts.forEach((prompt) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = prompt.label;
+    button.dataset.template = prompt.template;
+    container.appendChild(button);
+  });
+  updateTipsVisibility();
+}
+
+function formatPrompt(template) {
+  const fileLabel = state.currentPath || 'the current file';
+  return template.replace(/\{file\}/gi, fileLabel);
+}
+
+function applyPromptTemplate(template) {
+  if (!template) return;
+  const chatBox = $('#chatBox');
+  if (!chatBox) return;
+  const prompt = formatPrompt(template);
+  chatBox.value = prompt;
+  chatBox.focus();
+  chatBox.setSelectionRange(prompt.length, prompt.length);
+  if (state.tipsDismissed) {
+    // bring tips back when user explicitly uses them
+    showTips();
+  }
+}
+
+function updateTipsVisibility() {
+  const assist = $('#chatAssist');
+  if (!assist) return;
+  assist.classList.toggle('isHidden', state.tipsDismissed);
+}
+
+function restoreTipsPreference() {
+  state.tipsDismissed = localStorage.getItem('lc-hide-tips') === '1';
+  updateTipsVisibility();
+}
+
+function dismissTips() {
+  state.tipsDismissed = true;
+  localStorage.setItem('lc-hide-tips', '1');
+  updateTipsVisibility();
+}
+
+function showTips() {
+  state.tipsDismissed = false;
+  localStorage.removeItem('lc-hide-tips');
+  updateTipsVisibility();
+}
+
 function clearChatTimer() {
   if (state.chatTimerId) {
     clearInterval(state.chatTimerId);
@@ -176,6 +255,8 @@ async function api(path, opts = {}) {
 
 async function init() {
   bindUI();
+  restoreTipsPreference();
+  renderQuickPrompts();
   setTopStatus('Loading settings…', 'pending');
   await loadSettings();
   applySettingsToUI();
@@ -201,6 +282,18 @@ function bindUI() {
   $('#settingsPanel').addEventListener('click', (ev) => {
     if (ev.target === $('#settingsPanel')) hideSettingsPanel();
   });
+  $('#btnHelp').addEventListener('click', () => {
+    showHelpPanel();
+  });
+  $('#btnCloseHelp').addEventListener('click', hideHelpPanel);
+  $('#btnHelpCloseFooter').addEventListener('click', hideHelpPanel);
+  $('#btnRestoreTips').addEventListener('click', () => {
+    showTips();
+    hideHelpPanel();
+  });
+  $('#helpPanel').addEventListener('click', (ev) => {
+    if (ev.target === $('#helpPanel')) hideHelpPanel();
+  });
   $('#btnSaveSettings').addEventListener('click', async () => {
     try {
       await persistSettingsSilently();
@@ -214,6 +307,7 @@ function bindUI() {
   $('#btnRefreshModels').addEventListener('click', async () => {
     await refreshModels(true);
   });
+  $('#btnTestConnection').addEventListener('click', testBackendConnection);
   $('#backendSelect').addEventListener('change', async () => {
     const backend = $('#backendSelect').value;
     if (state.settings) {
@@ -272,6 +366,16 @@ function bindUI() {
   }
   $('#btnScrollToBottom').addEventListener('click', () => {
     scrollChatToBottom({ behavior: 'smooth' });
+  });
+
+  $('#btnDismissTips').addEventListener('click', dismissTips);
+  $('#chatAssistButtons').addEventListener('click', (ev) => {
+    const target = ev.target;
+    if (!(target instanceof HTMLElement)) return;
+    const { template } = target.dataset;
+    if (template) {
+      applyPromptTemplate(template);
+    }
   });
 
   $('#btnNewFile').addEventListener('click', async () => {
@@ -343,6 +447,10 @@ function bindUI() {
     if ((ev.metaKey || ev.ctrlKey) && ev.shiftKey && ev.key.toLowerCase() === 'f') {
       ev.preventDefault();
       $('#replaceInput').focus();
+    }
+    if (ev.key === 'Escape') {
+      hideHelpPanel();
+      hideSettingsPanel();
     }
   });
 
@@ -481,10 +589,49 @@ function hideSettingsPanel() {
   $('#settingsPanel').setAttribute('aria-hidden', 'true');
 }
 
+function showHelpPanel() {
+  const panel = $('#helpPanel');
+  panel.classList.remove('hidden');
+  panel.setAttribute('aria-hidden', 'false');
+}
+
+function hideHelpPanel() {
+  const panel = $('#helpPanel');
+  panel.classList.add('hidden');
+  panel.setAttribute('aria-hidden', 'true');
+}
+
 function setSettingsStatus(message, isError) {
   const el = $('#settingsStatus');
   el.textContent = message;
   el.style.color = isError ? 'var(--danger)' : 'var(--muted)';
+}
+
+async function testBackendConnection() {
+  const payload = collectSettingsFromUI();
+  const backend = payload.backend;
+  const baseUrl = backend === 'ollama' ? payload.ollama_base_url : payload.lmstudio_base_url;
+  try {
+    setSettingsStatus(`Testing ${formatBackendName(backend)}…`, false);
+    const res = await api('/backend/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ backend, base_url: baseUrl }),
+    });
+    if (res.ok === false) {
+      setSettingsStatus(`Connection failed: ${res.error || 'Unknown error'}`, true);
+      return;
+    }
+    const latency = typeof res.latency_seconds === 'number' ? res.latency_seconds.toFixed(2) : 'n/a';
+    const preview = (res.models_preview || []).join(', ');
+    const extra = preview ? ` Example models: ${preview}` : '';
+    setSettingsStatus(
+      `Connected to ${formatBackendName(backend)} in ${latency}s • ${res.model_count || 0} models.${extra}`,
+      false,
+    );
+  } catch (err) {
+    setSettingsStatus(`Connection failed: ${err.message}`, true);
+  }
 }
 
 function restoreTheme() {

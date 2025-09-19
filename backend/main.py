@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
 from sse_starlette.sse import EventSourceResponse
 
 BACKEND_ROOT = Path(__file__).resolve().parent
@@ -81,6 +82,21 @@ def append_history(entry: Dict[str, Any]) -> None:
         pass
 
 
+class NoCacheStaticFiles(StaticFiles):
+    """StaticFiles variant that always revalidates assets."""
+
+    async def get_response(self, path: str, scope):  # type: ignore[override]
+        response: Response = await super().get_response(path, scope)
+        # Disable aggressive browser caching so UI changes show up on refresh.
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
+    def is_not_modified(self, scope, request_headers, response_headers) -> bool:  # type: ignore[override]
+        return False
+
+
 app = FastAPI(title="Local Cursor")
 app.add_middleware(
     CORSMiddleware,
@@ -90,7 +106,11 @@ app.add_middleware(
     allow_credentials=True,
 )
 
-app.mount("/assets", StaticFiles(directory=str(FRONTEND_ROOT / "assets")), name="assets")
+app.mount(
+    "/assets",
+    NoCacheStaticFiles(directory=str(FRONTEND_ROOT / "assets")),
+    name="assets",
+)
 
 
 @app.get("/")
@@ -132,23 +152,63 @@ async def list_models(backend: Optional[str] = None, base_url: Optional[str] = N
     timeout = httpx.Timeout(5.0, read=20.0)
 
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            if backend_name == "ollama":
-                url = base_url or settings["ollama_base_url"]
-                response = await client.get(f"{url.rstrip('/')}/api/tags")
-                response.raise_for_status()
-                data = response.json()
-                models = [item["name"] for item in data.get("models", []) if item.get("name")]
-            else:
-                url = base_url or settings["lmstudio_base_url"]
-                response = await client.get(f"{url.rstrip('/')}/v1/models")
-                response.raise_for_status()
-                data = response.json()
-                models = [item["id"] for item in data.get("data", []) if item.get("id")]
-    except Exception as exc:
+        models = await query_available_models(backend_name, base_url, settings, timeout)
+    except Exception as exc:  # pragma: no cover - defensive, network issues vary
         return {"backend": backend_name, "models": [], "error": str(exc)}
 
     return {"backend": backend_name, "models": models}
+
+
+async def query_available_models(
+    backend_name: str,
+    base_url: Optional[str],
+    settings: Dict[str, Any],
+    timeout: httpx.Timeout,
+) -> List[str]:
+    url = base_url or (
+        settings["ollama_base_url"] if backend_name == "ollama" else settings["lmstudio_base_url"]
+    )
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        if backend_name == "ollama":
+            response = await client.get(f"{url.rstrip('/')}/api/tags")
+            response.raise_for_status()
+            data = response.json()
+            return [item["name"] for item in data.get("models", []) if item.get("name")]
+        response = await client.get(f"{url.rstrip('/')}/v1/models")
+        response.raise_for_status()
+        data = response.json()
+        return [item["id"] for item in data.get("data", []) if item.get("id")]
+
+
+@app.post("/backend/test")
+async def test_backend(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    settings = load_settings()
+    payload = payload or {}
+    backend_name = payload.get("backend") or settings["backend"]
+    base_url = payload.get("base_url")
+    timeout = httpx.Timeout(5.0, read=20.0)
+    started = datetime.utcnow()
+
+    try:
+        models = await query_available_models(backend_name, base_url, settings, timeout)
+    except Exception as exc:  # pragma: no cover - depends on local setup
+        return {
+            "ok": False,
+            "backend": backend_name,
+            "error": str(exc),
+            "base_url": base_url or (settings["ollama_base_url"] if backend_name == "ollama" else settings["lmstudio_base_url"]),
+        }
+
+    duration = (datetime.utcnow() - started).total_seconds()
+    preview = models[:5]
+    return {
+        "ok": True,
+        "backend": backend_name,
+        "base_url": base_url or (settings["ollama_base_url"] if backend_name == "ollama" else settings["lmstudio_base_url"]),
+        "latency_seconds": duration,
+        "model_count": len(models),
+        "models_preview": preview,
+    }
 
 
 def _flatten_messages(messages: List[Dict[str, Any]]) -> str:

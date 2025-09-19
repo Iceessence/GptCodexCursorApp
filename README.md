@@ -10,6 +10,7 @@ Works with **Ollama** or **LM Studio** on your machine. No cloud, no paid APIs.
 - Editor with line numbers, soft-wrap, and basic shortcuts (Ctrl/Cmd+S to save)
 - Search & replace across files or in an open file
 - History log stored locally (`backend/data/history.json`)
+- Guided quick-start help overlay and beginner-friendly prompt shortcuts
 - Model parameters: temperature, top_p, max_tokens
 - Quick backend/model switcher in the top bar + searchable model palette
 - Dark/Light theme toggle
@@ -35,6 +36,10 @@ chmod +x run.sh
 ```
 Then open http://127.0.0.1:8000
 
+### Verify the local model connection
+
+Open ⚙ Settings and click **Test connection** after choosing your backend and base URL. The app reports round-trip time and a quick preview of detected models so you can confirm everything is reachable before chatting.
+
 ## Settings
 Click the ⚙️ icon in the top bar to switch between Ollama and LM Studio, choose a model, and adjust parameters.
 You can also switch backends or models instantly from the top bar quick selector.
@@ -52,6 +57,26 @@ python backend\build_exe.py --onefile
 ```
 
 The executable is created in `backend/dist/LocalCursor.exe`. Run it to start the bundled server; it opens `http://127.0.0.1:8000` in your default browser. Use `python backend\build_exe.py --check` to verify PyInstaller is available or pass `--print-only` to inspect the build command.
+
+## Keep everything up to date
+
+1. **Update your code** – pull the latest changes or sync your git fork.
+2. **Refresh dependencies** – inside the project folder run:
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate  # Windows: .\.venv\Scripts\activate
+   python -m pip install --upgrade pip
+   pip install -r backend/requirements.txt
+   ```
+   For Windows builds, also install `pip install -r backend/requirements-build.txt`.
+3. **Run a quick health check** – `python -m compileall backend` makes sure there are no syntax errors. You can also start the dev server with `./run.sh` (or `./run.ps1` on Windows) to confirm the UI loads.
+4. **Rebuild the executable when needed** –
+   ```powershell
+   python backend\build_exe.py --clean --onefile
+   ```
+   The build script prints the output path (default: `backend/dist/LocalCursor.exe`). Use `--print-only` first if you only want to review the command.
+
+Whenever you change the frontend, just refresh the browser—asset caching is disabled so the UI immediately reflects your latest edits.
 
 ## Notes
 - For **Ollama** models list, we query `/api/tags` locally.
