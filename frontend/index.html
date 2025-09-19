@@ -16,6 +16,8 @@
         <button id="btnNewFile" title="New file (Ctrl+N)">＋ File</button>
         <button id="btnNewFolder" title="New folder">＋ Folder</button>
         <button id="btnDelete" title="Delete selected">🗑 Delete</button>
+        <button id="btnOpenVSCode" title="Open workspace in VS Code">🡕 VS Code</button>
+        <button id="btnCloneRepo" title="Clone GitHub repository">⎘ Clone</button>
         <div class="divider"></div>
         <input id="searchBox" placeholder="Search (Enter)" autocomplete="off">
       </div>
@@ -100,6 +102,26 @@
             <label><input type="checkbox" id="cbInsert"> Allow assistant to edit workspace</label>
             <button id="btnAsk">Ask ▶</button>
           </div>
+        </div>
+        <div class="terminalPanel" id="terminalPanel">
+          <div class="terminalHeader">
+            <span class="terminalTitle">Terminal</span>
+            <div class="terminalHeaderActions">
+              <span id="terminalStatus" role="status" aria-live="polite"></span>
+              <button id="btnClearTerminal" type="button">Clear</button>
+            </div>
+          </div>
+          <div class="terminalOutput" id="terminalOutput" role="log" aria-live="polite"></div>
+          <form id="terminalForm" class="terminalForm">
+            <input id="terminalInput" type="text" placeholder="Run command (e.g. ls -la)" autocomplete="off">
+            <label class="terminalCwdLabel">in
+              <select id="terminalCwd">
+                <option value="">workspace/</option>
+                <option value="__current__">current file folder</option>
+              </select>
+            </label>
+            <button type="submit">Run</button>
+          </form>
         </div>
       </section>
     </main>

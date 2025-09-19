@@ -11,6 +11,7 @@ const state = {
   chatTimerId: null,
   modelCache: {},
   tipsDismissed: false,
+  terminalBusy: false,
   quickPrompts: [
     {
       label: "Explain this file",
@@ -368,6 +369,157 @@ function maybeAutoScrollChat() {
   }
 }
 
+function setTerminalStatus(message, tone = 'muted') {
+  const el = $('#terminalStatus');
+  if (!el) return;
+  el.textContent = message || '';
+  let color = 'var(--muted)';
+  if (tone === 'success') color = 'var(--success)';
+  else if (tone === 'error') color = 'var(--danger)';
+  else if (tone === 'pending') color = 'var(--pending)';
+  el.style.color = color;
+}
+
+function appendTerminalEntry(type, text) {
+  if (!text) return;
+  const output = $('#terminalOutput');
+  if (!output) return;
+  const pre = document.createElement('pre');
+  pre.className = ['terminalOutputEntry', type].filter(Boolean).join(' ');
+  pre.textContent = text;
+  output.appendChild(pre);
+  output.scrollTop = output.scrollHeight;
+}
+
+function clearTerminal() {
+  const output = $('#terminalOutput');
+  if (output) {
+    output.innerHTML = '';
+  }
+  setTerminalStatus('Ready', 'muted');
+}
+
+function resolveTerminalCwd(rawValue) {
+  if (rawValue === '__current__') {
+    if (!state.currentPath) return '';
+    const parts = state.currentPath.split('/');
+    parts.pop();
+    return parts.join('/') || '';
+  }
+  return rawValue || '';
+}
+
+function syncTerminalCwd() {
+  const select = $('#terminalCwd');
+  if (!select) return;
+  const currentDir = resolveTerminalCwd('__current__');
+  const currentOption = Array.from(select.options).find((opt) => opt.value === '__current__');
+  if (currentOption) {
+    currentOption.textContent = currentDir ? `${currentDir}/` : 'current file folder';
+    currentOption.disabled = !currentDir;
+  }
+  if (!currentDir && select.value === '__current__') {
+    select.value = '';
+  }
+}
+
+async function runTerminalCommand(ev) {
+  ev?.preventDefault?.();
+  if (state.terminalBusy) return;
+  const input = $('#terminalInput');
+  const select = $('#terminalCwd');
+  if (!input) return;
+  const command = input.value.trim();
+  if (!command) return;
+  const cwdValue = resolveTerminalCwd(select?.value || '');
+  appendTerminalEntry('command', `$ ${command}${cwdValue ? `  (in ${cwdValue}/)` : ''}`);
+  input.value = '';
+  state.terminalBusy = true;
+  setTerminalStatus('Running…', 'pending');
+  try {
+    const body = { command, cwd: cwdValue, timeout: 240 };
+    const res = await api('/terminal/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const duration = typeof res.duration === 'number' ? `${res.duration.toFixed(2)}s` : 'n/a';
+    if (res.stdout) {
+      appendTerminalEntry('stdout', res.stdout.trimEnd());
+    }
+    if (res.stderr) {
+      appendTerminalEntry('stderr', res.stderr.trimEnd());
+    }
+    const metaBits = [`exit ${res.exit_code ?? 'n/a'}`, duration];
+    if (res.truncated) {
+      metaBits.push('output truncated');
+    }
+    appendTerminalEntry('meta', metaBits.join(' • '));
+    setTerminalStatus(res.ok ? 'Command completed' : 'Command completed with errors', res.ok ? 'success' : 'error');
+  } catch (err) {
+    const message = err?.message || 'Command failed';
+    appendTerminalEntry('stderr', message);
+    setTerminalStatus('Command failed', 'error');
+  } finally {
+    state.terminalBusy = false;
+  }
+}
+
+async function openVSCode() {
+  try {
+    setTopStatus('Opening VS Code…', 'pending', { allowDuringStream: true });
+    const payload = {};
+    const currentDir = resolveTerminalCwd('__current__');
+    if (currentDir) {
+      payload.path = currentDir;
+    }
+    const res = await api('/integration/open_vscode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const executable = res.executable ? res.executable.split(/[/\\]/).pop() : 'code';
+    setTopStatus('VS Code launched', 'idle', { allowDuringStream: true });
+    setTerminalStatus(`Opened in VS Code (${executable})`, 'success');
+  } catch (err) {
+    const message = err?.message || 'VS Code not available';
+    setTopStatus('VS Code unavailable', 'error', { allowDuringStream: true });
+    setTerminalStatus(message, 'error');
+    alert(`Failed to open VS Code: ${message}`);
+  }
+}
+
+async function promptCloneRepo() {
+  const url = window.prompt('Git repository URL to clone into workspace:');
+  if (!url) return;
+  const destination = window.prompt('Destination folder (leave blank to use repo name):', '');
+  if (destination === null) return;
+  try {
+    setTopStatus('Cloning repository…', 'pending', { allowDuringStream: true });
+    setTerminalStatus('Cloning repository…', 'pending');
+    const res = await api('/git/clone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, destination: destination || undefined }),
+    });
+    appendTerminalEntry('meta', `Cloned ${url} → ${res.path}`);
+    if (res.stdout) {
+      appendTerminalEntry('stdout', res.stdout.trimEnd());
+    }
+    if (res.stderr) {
+      appendTerminalEntry('stderr', res.stderr.trimEnd());
+    }
+    setTerminalStatus('Repository cloned', 'success');
+    setTopStatus('Clone complete', 'idle', { allowDuringStream: true });
+    await refreshTree('');
+  } catch (err) {
+    const message = err?.message || 'Clone failed';
+    setTerminalStatus(message, 'error');
+    setTopStatus('Clone failed', 'error', { allowDuringStream: true });
+    alert(`Failed to clone repository: ${message}`);
+  }
+}
+
 async function api(path, opts = {}) {
   const res = await fetch(path, opts);
   if (!res.ok) {
@@ -394,6 +546,8 @@ async function init() {
     "welcome.txt",
     `# Welcome to Local Cursor\n\n- Configure your backend in Settings.\n- Manage files from the workspace panel.\n- Ask questions on the right to interact with the selected model.\n- Use the find/replace toolbar under the editor title.\n\nEnjoy fully offline coding assistance!\n`
   );
+  syncTerminalCwd();
+  setTerminalStatus('Ready', 'muted');
   restoreTheme();
   updateChatMeta(state.settings?.backend, getModelInputValue());
   setChatStatus('idle', 'Idle');
@@ -529,6 +683,10 @@ function bindUI() {
     await refreshTree("");
   });
 
+  $('#btnOpenVSCode').addEventListener('click', openVSCode);
+
+  $('#btnCloneRepo').addEventListener('click', promptCloneRepo);
+
   $('#btnDelete').addEventListener('click', async () => {
     if (!state.currentPath) return;
     if (!confirm(`Delete ${state.currentPath}?`)) return;
@@ -540,6 +698,7 @@ function bindUI() {
     state.currentPath = "";
     $('#editor').value = "";
     $('#currentPath').textContent = 'No file selected';
+    syncTerminalCwd();
     await refreshTree("");
   });
 
@@ -554,6 +713,7 @@ function bindUI() {
     });
     state.currentPath = newName;
     $('#currentPath').textContent = newName;
+    syncTerminalCwd();
     await refreshTree("");
   });
 
@@ -602,6 +762,8 @@ function bindUI() {
   });
 
   syncQuickControls();
+  $('#btnClearTerminal').addEventListener('click', clearTerminal);
+  $('#terminalForm').addEventListener('submit', runTerminalCommand);
 }
 
 async function loadSettings() {
@@ -821,12 +983,14 @@ async function loadFile(path) {
   $('#currentPath').textContent = res.path;
   $('#editor').value = res.content;
   $('#editor').focus();
+  syncTerminalCwd();
 }
 
 function openFile(path, content) {
   state.currentPath = path;
   $('#currentPath').textContent = path;
   $('#editor').value = content || '';
+  syncTerminalCwd();
 }
 
 async function saveFile() {
@@ -845,6 +1009,7 @@ async function saveFile() {
     body: JSON.stringify(body),
   });
   $('#currentPath').textContent = state.currentPath;
+  syncTerminalCwd();
   await refreshTree("");
 }
 
@@ -1040,20 +1205,28 @@ async function askModel() {
     }
 
     const initialValue = editor.value;
+    const originalSelection = initialValue.slice(selectionStart, selectionEnd);
     beforeSelection = initialValue.slice(0, selectionStart);
     afterSelection = initialValue.slice(selectionEnd);
     lastInserted = null;
     applyInsertion = (rawText) => {
       if (!insertToEditor) return;
       const sanitized = extractInsertionContent(rawText).trimEnd();
-      if (lastInserted === sanitized) return;
-      lastInserted = sanitized;
       const targetEditor = $('#editor');
       if (!targetEditor) return;
+      if (!sanitized) {
+        if (lastInserted !== null) {
+          targetEditor.value = initialValue;
+          targetEditor.setSelectionRange(selectionStart, selectionStart + originalSelection.length);
+          lastInserted = null;
+        }
+        return;
+      }
+      if (lastInserted === sanitized) return;
+      lastInserted = sanitized;
       const before = beforeSelection;
       const after = afterSelection;
-      const combined = sanitized ? `${before}${sanitized}${after}` : `${before}${after}`;
-      targetEditor.value = combined;
+      targetEditor.value = `${before}${sanitized}${after}`;
       const cursor = before.length + sanitized.length;
       targetEditor.setSelectionRange(cursor, cursor);
     };

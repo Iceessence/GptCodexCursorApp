@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -221,6 +222,20 @@ def _flatten_messages(messages: List[Dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
+def _compute_ollama_options(temperature: float, top_p: float, max_tokens: int) -> Dict[str, Any]:
+    options: Dict[str, Any] = {
+        "temperature": temperature,
+        "top_p": top_p,
+        "num_ctx": max_tokens,
+        "num_predict": max_tokens,
+        "keep_alive": 0,
+    }
+    cpu_count = os.cpu_count()
+    if cpu_count and cpu_count > 0:
+        options["num_thread"] = cpu_count
+    return options
+
+
 async def _stream_ollama(
     client: httpx.AsyncClient,
     url: str,
@@ -309,11 +324,7 @@ async def chat_stream(request: Request) -> EventSourceResponse:
                     "model": model,
                     "prompt": _flatten_messages(messages),
                     "stream": True,
-                    "options": {
-                        "temperature": temperature,
-                        "top_p": top_p,
-                        "num_ctx": max_tokens,
-                    },
+                    "options": _compute_ollama_options(temperature, top_p, max_tokens),
                 }
                 try:
                     async for event in _stream_ollama(client, base_url, req, request):
@@ -375,11 +386,7 @@ async def chat_once(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "model": model,
                 "prompt": _flatten_messages(messages),
                 "stream": False,
-                "options": {
-                    "temperature": temperature,
-                    "top_p": top_p,
-                    "num_ctx": max_tokens,
-                },
+                "options": _compute_ollama_options(temperature, top_p, max_tokens),
             }
             response = await client.post(f"{base_url.rstrip('/')}/api/generate", json=req)
             response.raise_for_status()
@@ -544,3 +551,130 @@ async def fs_search(payload: Dict[str, Any]) -> Dict[str, Any]:
             except Exception:
                 continue
     return {"matches": matches}
+
+
+async def _run_command(command: str, cwd: Path, timeout: float) -> Dict[str, Any]:
+    started = datetime.utcnow()
+    process = await asyncio.create_subprocess_shell(
+        command,
+        cwd=str(cwd),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        process.kill()
+        await process.communicate()
+        raise HTTPException(status_code=504, detail="Command timed out") from exc
+
+    duration = (datetime.utcnow() - started).total_seconds()
+    stdout_text = stdout_bytes.decode("utf-8", errors="replace")
+    stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+    max_output = 1_000_000
+    truncated = False
+    if len(stdout_text) > max_output:
+        stdout_text = stdout_text[:max_output] + "\n… (truncated)"
+        truncated = True
+    if len(stderr_text) > max_output:
+        stderr_text = stderr_text[:max_output] + "\n… (truncated)"
+        truncated = True
+
+    return {
+        "ok": process.returncode == 0,
+        "exit_code": process.returncode,
+        "stdout": stdout_text,
+        "stderr": stderr_text,
+        "duration": duration,
+        "truncated": truncated,
+    }
+
+
+@app.post("/terminal/run")
+async def terminal_run(payload: Dict[str, Any]) -> Dict[str, Any]:
+    command = (payload.get("command") or "").strip()
+    if not command:
+        raise HTTPException(status_code=400, detail="Command is required")
+
+    cwd_path = payload.get("cwd", "")
+    timeout = float(payload.get("timeout", 120))
+    working_dir = _safe_join(WORKSPACE_ROOT, cwd_path)
+    if not working_dir.exists():
+        raise HTTPException(status_code=400, detail="Working directory does not exist")
+
+    result = await _run_command(command, working_dir, timeout)
+    return result
+
+
+@app.post("/integration/open_vscode")
+async def open_vscode(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = payload or {}
+    target_path = payload.get("path", "")
+    target = _safe_join(WORKSPACE_ROOT, target_path) if target_path else WORKSPACE_ROOT
+
+    def _launch() -> str:
+        candidates = [
+            "code",
+            "code.cmd",
+            "code.exe",
+            "code-insiders",
+            "code-insiders.cmd",
+            "code-insiders.exe",
+        ]
+        for candidate in candidates:
+            executable = shutil.which(candidate)
+            if executable:
+                subprocess.Popen([executable, str(target)], cwd=str(target))
+                return executable
+        raise FileNotFoundError("VS Code command-line launcher not found. Install the 'code' command first.")
+
+    try:
+        executable = await asyncio.to_thread(_launch)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"ok": True, "executable": executable}
+
+
+@app.post("/git/clone")
+async def git_clone(payload: Dict[str, Any]) -> Dict[str, Any]:
+    url = (payload.get("url") or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Repository URL is required")
+
+    dest_name = (payload.get("destination") or "").strip()
+    if not dest_name:
+        dest_name = Path(url.rstrip("/")).stem or "cloned-repo"
+
+    destination = _safe_join(WORKSPACE_ROOT, dest_name)
+    if destination.exists():
+        raise HTTPException(status_code=400, detail="Destination already exists")
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    process = await asyncio.create_subprocess_exec(
+        "git",
+        "clone",
+        url,
+        str(destination),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout_bytes, stderr_bytes = await process.communicate()
+    stdout_text = stdout_bytes.decode("utf-8", errors="replace")
+    stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+
+    if process.returncode != 0:
+        if destination.exists():
+            if destination.is_dir():
+                shutil.rmtree(destination, ignore_errors=True)
+            else:
+                destination.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"Git clone failed: {stderr_text or stdout_text}")
+
+    return {
+        "ok": True,
+        "path": destination.relative_to(WORKSPACE_ROOT).as_posix(),
+        "stdout": stdout_text,
+        "stderr": stderr_text,
+    }
