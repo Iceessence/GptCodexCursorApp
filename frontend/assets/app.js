@@ -41,6 +41,134 @@ const numbers = {
   },
 };
 
+function guessFilenameFromPrompt(prompt) {
+  if (!prompt) return 'assistant-output.txt';
+  const match = prompt.match(/([A-Za-z0-9_\-/]+\.[A-Za-z0-9]+)/);
+  if (match && match[1]) {
+    return match[1].replace(/^\/*/, '');
+  }
+  return 'assistant-output.txt';
+}
+
+function isLikelyCodeLine(line) {
+  if (!line) return false;
+  if (/^[-*+]\s+/.test(line)) return false;
+  if (/^\d+\.\s+/.test(line)) return false;
+  if (/^#{1,6}\s+/.test(line)) return false;
+  if (/^[A-Za-z].*[.!?]$/.test(line) && !/[;{}()=<>]/.test(line)) return false;
+  const keywords = [
+    'import ',
+    'from ',
+    'class ',
+    'def ',
+    'function ',
+    'const ',
+    'let ',
+    'var ',
+    'return ',
+    'if ',
+    'for ',
+    'while ',
+    'switch ',
+    'case ',
+    'enum ',
+    '#include',
+    '#!',
+    'public ',
+    'private ',
+    'protected ',
+    'async ',
+    'await ',
+    'try ',
+    'catch ',
+    'with ',
+    'export ',
+    'module.exports',
+    'print(',
+    'console.',
+  ];
+  if (keywords.some((kw) => line.startsWith(kw))) return true;
+  if (/=>/.test(line)) return true;
+  if (/[;{}=<>]/.test(line)) return true;
+  if (line.startsWith('</') || line.startsWith('<!') || /^<\w+/.test(line)) return true;
+  if (/^\s*(?:elif|else|do|endif|endfor|endforeach|fi)\b/.test(line)) return true;
+  if (/^\s*\w+\s*\([^)]*\)\s*\{?/.test(line)) return true;
+  return false;
+}
+
+function extractInsertionContent(text) {
+  if (!text) return '';
+  const lines = text.split('\n');
+  const blocks = [];
+  let inFence = false;
+  let current = [];
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    if (trimmed.startsWith('```')) {
+      if (!inFence) {
+        inFence = true;
+        current = [];
+        const inline = rawLine.slice(rawLine.indexOf('```') + 3).trim();
+        if (inline) {
+          current.push(inline);
+        }
+      } else {
+        inFence = false;
+        const joined = current.join('\n').trimEnd();
+        if (joined) {
+          blocks.push(joined);
+        }
+        current = [];
+      }
+      continue;
+    }
+    if (inFence) {
+      current.push(rawLine.replace(/\s+$/, ''));
+    }
+  }
+  if (inFence && current.length) {
+    const joined = current.join('\n').trimEnd();
+    if (joined) {
+      blocks.push(joined);
+    }
+  }
+  if (blocks.length) {
+    return blocks.join('\n\n');
+  }
+
+  const codeGroups = [];
+  let buffer = [];
+  const flush = () => {
+    if (buffer.length) {
+      const joined = buffer.join('\n').trimEnd();
+      if (joined) {
+        codeGroups.push(joined);
+      }
+      buffer = [];
+    }
+  };
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) {
+      flush();
+      continue;
+    }
+    if (isLikelyCodeLine(trimmed)) {
+      buffer.push(rawLine.replace(/\s+$/, ''));
+    } else {
+      flush();
+    }
+  }
+  flush();
+
+  if (codeGroups.length) {
+    return codeGroups.join('\n\n');
+  }
+
+  return '';
+}
+
 function formatBackendName(backend) {
   if (backend === 'ollama') return 'Ollama';
   if (backend === 'lmstudio') return 'LM Studio';
@@ -863,6 +991,15 @@ async function askModel() {
     return;
   }
 
+  let insertToEditor = $('#cbInsert').checked;
+  let editor = $('#editor');
+  let selectionStart = editor.selectionStart;
+  let selectionEnd = editor.selectionEnd;
+  let beforeSelection = editor.value.slice(0, selectionStart);
+  let afterSelection = editor.value.slice(selectionEnd);
+  let lastInserted = null;
+  let applyInsertion = () => {};
+
   try {
     state.streaming = true;
     state.autoScrollChat = true;
@@ -874,10 +1011,52 @@ async function askModel() {
     state.chatStartTime = performance.now();
     setChatTimer('Waiting for response…');
 
-    const insertToEditor = $('#cbInsert').checked;
-    const editor = $('#editor');
-    const selectionStart = editor.selectionStart;
-    const selectionEnd = editor.selectionEnd;
+    if (insertToEditor && !state.currentPath) {
+      const suggested = guessFilenameFromPrompt(prompt);
+      const targetPath = window.prompt(
+        'No file is currently open. Enter a workspace path to create for the generated code:',
+        suggested,
+      );
+      if (!targetPath) {
+        insertToEditor = false;
+      } else {
+        try {
+          await api('/fs/new', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: targetPath, is_dir: false }),
+          });
+          await refreshTree('');
+          await loadFile(targetPath);
+          editor = $('#editor');
+          selectionStart = 0;
+          selectionEnd = 0;
+        } catch (creationErr) {
+          console.error('Failed to prepare workspace file for insertion', creationErr);
+          setTopStatus('Workspace edits disabled (failed to prepare file)', 'error', { allowDuringStream: true });
+          insertToEditor = false;
+        }
+      }
+    }
+
+    const initialValue = editor.value;
+    beforeSelection = initialValue.slice(0, selectionStart);
+    afterSelection = initialValue.slice(selectionEnd);
+    lastInserted = null;
+    applyInsertion = (rawText) => {
+      if (!insertToEditor) return;
+      const sanitized = extractInsertionContent(rawText).trimEnd();
+      if (lastInserted === sanitized) return;
+      lastInserted = sanitized;
+      const targetEditor = $('#editor');
+      if (!targetEditor) return;
+      const before = beforeSelection;
+      const after = afterSelection;
+      const combined = sanitized ? `${before}${sanitized}${after}` : `${before}${after}`;
+      targetEditor.value = combined;
+      const cursor = before.length + sanitized.length;
+      targetEditor.setSelectionRange(cursor, cursor);
+    };
 
     const stream = await streamChat(payload, {
       status: (raw) => handleStreamStatus(raw, payload),
@@ -886,11 +1065,7 @@ async function askModel() {
         assistantBubble.classList.remove('error');
         assistantBubble.textContent = assistantEntry.content;
         maybeAutoScrollChat();
-        if (insertToEditor) {
-          const before = editor.value.slice(0, selectionStart);
-          const after = editor.value.slice(selectionEnd);
-          editor.value = before + assistantEntry.content + after;
-        }
+        applyInsertion(assistantEntry.content);
       },
       error: (message) => {
         assistantBubble.classList.add('error');
@@ -912,11 +1087,7 @@ async function askModel() {
           assistantEntry.content = fallback;
           assistantBubble.classList.remove('error');
           assistantBubble.textContent = fallback;
-          if (insertToEditor) {
-            const before = editor.value.slice(0, selectionStart);
-            const after = editor.value.slice(selectionEnd);
-            editor.value = before + fallback + after;
-          }
+          applyInsertion(fallback);
           finishChatTimer('Fallback completed');
           setChatStatus('success', 'Completed (fallback)');
         } else {
@@ -943,12 +1114,7 @@ async function askModel() {
     assistantEntry.content = fallback;
     assistantBubble.classList.remove('error');
     assistantBubble.textContent = fallback;
-    if (insertToEditor) {
-      const editor = $('#editor');
-      const before = editor.value.slice(0, selectionStart);
-      const after = editor.value.slice(selectionEnd);
-      editor.value = before + fallback + after;
-    }
+    applyInsertion(fallback);
     finishChatTimer('Fallback completed');
     setChatStatus('success', 'Completed (fallback)');
     setTopStatus('Ready', 'idle', { allowDuringStream: true });
