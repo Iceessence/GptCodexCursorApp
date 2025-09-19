@@ -93,7 +93,7 @@ class NoCacheStaticFiles(StaticFiles):
         response.headers["Expires"] = "0"
         return response
 
-    def is_not_modified(self, scope, request_headers, response_headers) -> bool:  # type: ignore[override]
+    def is_not_modified(self, response_headers, request_headers) -> bool:  # type: ignore[override]
         return False
 
 
